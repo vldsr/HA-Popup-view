@@ -18,9 +18,23 @@
       this.sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       this._popupCards = [];
       this._hassUnsubscribe = null;
+      this._popupHistoryActive = false;
+      this._popupHistoryHandler = this.handlePopupHistory.bind(this);
+      window.addEventListener('popstate', this._popupHistoryHandler);
       this.setupEventListener();
       log("Popup View component loaded");
       window.__popupViewInstance = this;
+    }
+    handlePopupHistory() {
+      const popup = document.querySelector('.subview-popup-overlay');
+      if (!popup || !this._popupHistoryActive) {
+        return;
+      }
+
+      log("Browser Back detected - closing popup");
+      this._popupHistoryActive = false;
+      const animationSpeed = Number(popup.dataset.animationSpeed) || 300;
+      this.closePopup(popup, animationSpeed, true);
     }
     interceptServiceCalls() {
       const originalCallService = this._hass?.callService;
@@ -317,7 +331,13 @@
         });
       }
     }
-    closePopup(popup, animationSpeed = 300) {
+    closePopup(popup, animationSpeed = 300, fromHistory = false) {
+      if (!fromHistory && this._popupHistoryActive) {
+        log("Closing popup normally - going back in history");
+        this._popupHistoryActive = false;
+        history.back();
+      }
+
       if (popup._cleanupAutoClose) {
         popup._cleanupAutoClose();
       }
@@ -432,6 +452,21 @@
       log("Received path:", subviewPath);
       log("Received title:", popupTitle);
       log("Options:", options);
+
+      // Add a dedicated history entry for the popup. Browser/Android Back
+      // consumes this entry and fires popstate instead of navigating away.
+      if (!this._popupHistoryActive) {
+        this._popupHistoryActive = true;
+        history.pushState(
+          {
+            ...history.state,
+            popup_view: true
+          },
+          '',
+          location.href
+        );
+      }
+
       const {
         animationSpeed = 300,
         autoClose = 0,
