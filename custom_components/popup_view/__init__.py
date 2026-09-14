@@ -19,6 +19,7 @@ ATTR_DISPLAYS = "displays"
 ATTR_ANIMATION_SPEED = "animation_speed"
 ATTR_AUTO_CLOSE = "auto_close"
 ATTR_BACKGROUND_BLUR = "background_blur"
+ATTR_HIDE_CLOSE_BUTTON = "hide_close_button"
 ATTR_POPUP_HEIGHT = "popup_height"
 ATTR_POPUP_WIDTH = "popup_width"
 ATTR_ALIGNMENT = "alignment"
@@ -38,6 +39,7 @@ SERVICE_OPEN_SCHEMA = vol.Schema({
     vol.Optional(ATTR_ANIMATION_SPEED, default=300): vol.Coerce(int),
     vol.Optional(ATTR_AUTO_CLOSE, default=0): vol.Coerce(int),
     vol.Optional(ATTR_BACKGROUND_BLUR, default=False): cv.boolean,
+    vol.Optional(ATTR_HIDE_CLOSE_BUTTON, default=False): cv.boolean,
     vol.Optional(ATTR_POPUP_HEIGHT, default=90): vol.All(vol.Coerce(int), vol.Range(min=10, max=100)),
     vol.Optional(ATTR_POPUP_WIDTH, default=90): vol.All(vol.Coerce(int), vol.Range(min=10, max=100)),
     vol.Optional(ATTR_ALIGNMENT, default="center"): vol.In(["bottom", "center", "top"]),
@@ -79,6 +81,7 @@ async def _setup_popup_view(hass: HomeAssistant) -> None:
         animation_speed = call.data.get(ATTR_ANIMATION_SPEED, 300)
         auto_close = call.data.get(ATTR_AUTO_CLOSE, 0)
         background_blur = call.data.get(ATTR_BACKGROUND_BLUR, False)
+        hide_close_button = call.data.get(ATTR_HIDE_CLOSE_BUTTON, False)
         popup_height = call.data.get(ATTR_POPUP_HEIGHT, 90)
         popup_width = call.data.get(ATTR_POPUP_WIDTH, 90)
         alignment = call.data.get(ATTR_ALIGNMENT, "bottom")
@@ -146,6 +149,7 @@ async def _setup_popup_view(hass: HomeAssistant) -> None:
             "animation_speed": animation_speed,
             "auto_close": auto_close,
             "background_blur": background_blur,
+            "hide_close_button": hide_close_button,
             "popup_height": popup_height,
             "popup_width": popup_width,
             "alignment": alignment,

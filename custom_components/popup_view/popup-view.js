@@ -418,6 +418,7 @@
                 animation_speed = 300,
                 auto_close = 0,
                 background_blur = false,
+                hide_close_button = false,
                 popup_height = 90,
                 popup_width = 90,
                 alignment = 'bottom',
@@ -428,6 +429,7 @@
                 animationSpeed: animation_speed ?? 300,
                 autoClose: auto_close ?? 0,
                 backgroundBlur: background_blur ?? false,
+                hideCloseButton: hide_close_button ?? false,
                 popupHeight: popup_height ?? 90,
                 popupWidth: popup_width ?? 90,
                 alignment: alignment || 'bottom',
@@ -471,6 +473,7 @@
         animationSpeed = 300,
         autoClose = 0,
         backgroundBlur = false,
+        hideCloseButton = false,
         popupHeight = 90,
         popupWidth = 90,
         alignment = 'bottom',
@@ -540,53 +543,55 @@
         touch-action: auto;
         pointer-events: auto;
       `;
-      const closeBtn = document.createElement('div');
-      closeBtn.style.cssText = popupTitle ? `
-        width: 40px;
-        height: 40px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        border-radius: 50%;
-        transition: all 0.2s ease;
-        background: var(--card-background-color, var(--ha-card-background));
-        box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,0.1));
-        margin-left: auto;
-      ` : `
-        width: 40px;
-        height: 40px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        border-radius: 50%;
-        transition: all 0.2s ease;
-        background: transparent;
-        box-shadow: none;
-        position: absolute;
-        top: 8px;
-        right: 8px;
-        z-index: 2;
-      `;
-      const closeIcon = document.createElement('ha-icon');
-      closeIcon.setAttribute('icon', 'mdi:close');
-      closeIcon.style.cssText = `
-        --mdc-icon-size: 24px;
-        width: 24px;
-        height: 24px;
-        color: var(--primary-text-color);
-      `;
-      closeBtn.appendChild(closeIcon);
-      closeBtn.addEventListener('click', () => this.closePopup(popup, animationSpeed));
-      closeBtn.addEventListener('mouseenter', () => {
-        closeBtn.style.background = 'var(--secondary-background-color)';
-        closeBtn.style.transform = 'scale(1.1)';
-      });
-      closeBtn.addEventListener('mouseleave', () => {
-        closeBtn.style.background = 'transparent';
-        closeBtn.style.transform = 'scale(1)';
-      });
+      if (hideCloseButton) {
+        const closeBtn = document.createElement('div');
+        closeBtn.style.cssText = popupTitle ? `
+          width: 40px;
+          height: 40px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          border-radius: 50%;
+          transition: all 0.2s ease;
+          background: var(--card-background-color, var(--ha-card-background));
+          box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,0.1));
+          margin-left: auto;
+        ` : `
+          width: 40px;
+          height: 40px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          border-radius: 50%;
+          transition: all 0.2s ease;
+          background: transparent;
+          box-shadow: none;
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          z-index: 2;
+        `;
+        const closeIcon = document.createElement('ha-icon');
+        closeIcon.setAttribute('icon', 'mdi:close');
+        closeIcon.style.cssText = `
+          --mdc-icon-size: 24px;
+          width: 24px;
+          height: 24px;
+          color: var(--primary-text-color);
+        `;
+        closeBtn.appendChild(closeIcon);
+        closeBtn.addEventListener('click', () => this.closePopup(popup, animationSpeed));
+        closeBtn.addEventListener('mouseenter', () => {
+          closeBtn.style.background = 'var(--secondary-background-color)';
+          closeBtn.style.transform = 'scale(1.1)';
+        });
+        closeBtn.addEventListener('mouseleave', () => {
+          closeBtn.style.background = 'transparent';
+          closeBtn.style.transform = 'scale(1)';
+        });
+      }
       if (popupTitle) {
         const controls = document.createElement('div');
         controls.className = 'popup-controls';
@@ -616,9 +621,11 @@
           white-space: nowrap;
         `;
         controls.appendChild(title);
-        controls.appendChild(closeBtn);
+        if (!hideCloseButton) {
+          controls.appendChild(closeBtn);
+        }
         container.appendChild(controls);
-      } else {
+      } else if (!hideCloseButton) {
         container.appendChild(closeBtn);
       }
       const content = document.createElement('div');

@@ -74,6 +74,15 @@ open:
       selector:
         boolean:
     
+    hide_close_button:
+      name: 🌫️ Hide Close Button
+      description: |
+        Hide close button in the top right corner of the popup
+      required: false
+      default: false
+      selector:
+        boolean:
+    
     popup_height:
       name: 📏 Maximum Height
       description: |
