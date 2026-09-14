@@ -543,7 +543,7 @@
         touch-action: auto;
         pointer-events: auto;
       `;
-      if (hideCloseButton) {
+      if (!hideCloseButton) {
         const closeBtn = document.createElement('div');
         closeBtn.style.cssText = popupTitle ? `
           width: 40px;
