@@ -1,7 +1,7 @@
 {
   "domain": "popup_view",
   "name": "Popup View",
-  "codeowners": ["@krth8"],
+  "codeowners": ["@vlds"],
   "config_flow": true,
   "dependencies": ["frontend", "http"],
   "documentation": "https://github.com/yourusername/popup-view",
