@@ -75,10 +75,10 @@ open:
         boolean:
     
     hide_close_button:
-      name: 🌫️ Hide Close Button
+      name: ❌ Hide Close Button
       description: |
         Hide close button in the top right corner of the popup
-      required: false
+      required: true
       default: false
       selector:
         boolean:

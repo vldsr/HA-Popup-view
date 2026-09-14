@@ -543,8 +543,8 @@
         touch-action: auto;
         pointer-events: auto;
       `;
-      if (!hideCloseButton) {
-        const closeBtn = document.createElement('div');
+      const closeBtn = hideCloseButton ? null : document.createElement('div');
+      if (closeBtn) {
         closeBtn.style.cssText = popupTitle ? `
           width: 40px;
           height: 40px;
@@ -621,11 +621,11 @@
           white-space: nowrap;
         `;
         controls.appendChild(title);
-        if (!hideCloseButton) {
+        if (closeBtn) {
           controls.appendChild(closeBtn);
         }
         container.appendChild(controls);
-      } else if (!hideCloseButton) {
+      } else if (closeBtn) {
         container.appendChild(closeBtn);
       }
       const content = document.createElement('div');
