@@ -106,6 +106,47 @@
       }
       log("🧹 Cleared popup cards and subscriptions");
     }
+    lockPageScroll(popup) {
+      const root = document.documentElement;
+      popup._pageScrollState = {
+        rootOverflow: root.style.overflow,
+        rootOverscrollBehavior: root.style.overscrollBehavior,
+        bodyOverflow: document.body.style.overflow,
+        bodyOverscrollBehavior: document.body.style.overscrollBehavior
+      };
+      root.style.overflow = 'hidden';
+      root.style.overscrollBehavior = 'none';
+      document.body.style.overflow = 'hidden';
+      document.body.style.overscrollBehavior = 'none';
+    }
+    restorePageScroll(popup) {
+      const state = popup?._pageScrollState;
+      if (!state) return;
+      const root = document.documentElement;
+      root.style.overflow = state.rootOverflow;
+      root.style.overscrollBehavior = state.rootOverscrollBehavior;
+      document.body.style.overflow = state.bodyOverflow;
+      document.body.style.overscrollBehavior = state.bodyOverscrollBehavior;
+      delete popup._pageScrollState;
+    }
+    isolatePopupDragEvents(popup) {
+      // Cards handle these events first. Stop them at the popup boundary so
+      // dashboard-level drag handlers cannot react to popup interactions.
+      const eventTypes = [
+        'dragstart', 'drag', 'dragend', 'dragenter', 'dragover', 'dragleave', 'drop',
+        'pointerdown', 'pointermove', 'pointerup', 'pointercancel',
+        'touchstart', 'touchmove', 'touchend', 'touchcancel'
+      ];
+      const stopAtPopupBoundary = (event) => event.stopPropagation();
+      for (const eventType of eventTypes) {
+        popup.addEventListener(eventType, stopAtPopupBoundary);
+      }
+      popup._cleanupDragIsolation = () => {
+        for (const eventType of eventTypes) {
+          popup.removeEventListener(eventType, stopAtPopupBoundary);
+        }
+      };
+    }
     getOrCreateDeviceId() {
       log("🔍 Getting device ID...");
       let deviceId = localStorage.getItem('popup_view_device_id');
@@ -289,16 +330,21 @@
       return null;
     }
     ensureScrollbarStyles() {
-      if (document.getElementById('popup-view-scrollbar-style')) return;
-      const style = document.createElement('style');
-      style.id = 'popup-view-scrollbar-style';
+      let style = document.getElementById('popup-view-scrollbar-style');
+      if (!style) {
+        style = document.createElement('style');
+        style.id = 'popup-view-scrollbar-style';
+        document.head.appendChild(style);
+      }
       style.textContent = `
+        .subview-popup-overlay > .popup-container {
+          height: auto !important;
+        }
         .popup-content::-webkit-scrollbar {
           width: 0;
           height: 0;
         }
       `;
-      document.head.appendChild(style);
     }
     applyThemeToPopup(theme, popupElement) {
       if (!theme) return;
@@ -344,10 +390,11 @@
       if (popup._cleanupEscape) {
         popup._cleanupEscape();
       }
+      if (popup._cleanupDragIsolation) {
+        popup._cleanupDragIsolation();
+      }
       this.clearPopupCards();
-      document.body.style.overflow = '';
-      document.body.style.position = '';
-      document.body.style.width = '';
+      this.restorePageScroll(popup);
       if (animationSpeed > 0) {
         const container = popup.querySelector('.popup-container');
         if (!popup.style.transition || !popup.style.transition.includes('opacity')) {
@@ -480,15 +527,17 @@
         transparentBackground = false,
         theme = ""
       } = options;
-      document.querySelector('.subview-popup-overlay')?.remove();
-      document.body.style.overflow = 'hidden';
-      document.body.style.position = 'fixed';
-      document.body.style.width = '100%';
+      const existingPopup = document.querySelector('.subview-popup-overlay');
+      if (existingPopup) {
+        this.closePopup(existingPopup, 0, true);
+      }
       const popup = document.createElement('div');
       popup.className = 'subview-popup-overlay';
       popup.dataset.alignment = alignment;
       popup.dataset.animationSpeed = animationSpeed;
       popup.dataset.popupWidth = popupWidth;
+      this.lockPageScroll(popup);
+      this.isolatePopupDragEvents(popup);
       let overlayAlignment = 'flex-end';
       if (alignment === 'center') {
         overlayAlignment = 'center';
@@ -511,6 +560,7 @@
         transition: opacity ${animationSpeed}ms cubic-bezier(0.4, 0, 0.2, 1);
         touch-action: none;  /* LEGG TIL: Blokkerer touch gestures */
         -webkit-touch-callout: none;  /* LEGG TIL: Disable callout */
+        overscroll-behavior: contain;
       `;
       const container = document.createElement('div');
       container.className = 'popup-container';
@@ -645,6 +695,7 @@
         box-sizing: border-box;
         pointer-events: auto;
         touch-action: manipulation;
+        overscroll-behavior: contain;
         scrollbar-width: none;
         -ms-overflow-style: none;
       `;
@@ -897,7 +948,7 @@
       viewElement.style.cssText = `
         width: 100%; 
         max-width: 100%;  /* VIKTIG: Forhindre at innhold går utenfor */
-        height: 100%; 
+        height: auto; 
         box-sizing: border-box;
         overflow-x: hidden;  /* Skjul evt overflow */
       `;
@@ -1065,76 +1116,32 @@
       const maxHeightStr = popupContainer.style.maxHeight || '90vh';
       const maxHeightVh = parseInt(maxHeightStr) || 90;
       const overlay = popupContainer.closest('.subview-popup-overlay');
-      const animationSpeed = parseInt(overlay?.dataset.animationSpeed) || 300;
-      const doInitialEstimation = () => {
+
+      const updateAvailableHeight = () => {
         const controls = popupContainer.querySelector('.popup-controls');
         const controlsHeight = controls ? controls.offsetHeight : 0;
-        const contentHeight = container.scrollHeight;
-        const totalNeededHeight = contentHeight + controlsHeight + 20;
         const maxAllowedHeight = (window.innerHeight * maxHeightVh) / 100;
-        if (totalNeededHeight > maxAllowedHeight) {
-          popupContainer.style.height = `${maxAllowedHeight}px`;
-          container.style.overflowY = 'auto';
-          log('Initial estimation: Content exceeds max height');
-        } else {
-          popupContainer.style.height = 'auto';
-          container.style.overflowY = 'hidden';
-          log('Initial estimation: Content fits');
-        }
+        const maxContentHeight = Math.max(0, maxAllowedHeight - controlsHeight);
+
+        // Keep the popup shrink-wrapped around its content. Only the scrolling
+        // area is constrained, so it can shrink again after it once overflowed.
+        popupContainer.style.setProperty('height', 'auto', 'important');
+        container.style.flex = '0 1 auto';
+        container.style.minHeight = '0';
+        container.style.maxHeight = `${maxContentHeight}px`;
+        container.style.overflowY = 'auto';
       };
-      doInitialEstimation();
-      setTimeout(() => {
-        log('Starting ResizeObserver after animation completed');
-        let isInitialLoad = true;
-        let loadTimeout = setTimeout(() => {
-          isInitialLoad = false;
-        }, 1500);
-        let resizeTimeout = null;
-        let lastHeight = 0;
-        const resizeObserver = new ResizeObserver((entries) => {
-          if (resizeTimeout) {
-            clearTimeout(resizeTimeout);
-          }
-          resizeTimeout = setTimeout(() => {
-            for (let entry of entries) {
-              const contentHeight = entry.contentRect.height;
-              if (Math.abs(contentHeight - lastHeight) < 5 && !isInitialLoad) {
-                return;
-              }
-              lastHeight = contentHeight;
-              log(`ResizeObserver: Content height: ${contentHeight}px`);
-              const controls = popupContainer.querySelector('.popup-controls');
-              const controlsHeight = controls ? controls.offsetHeight : 0;
-              const totalNeededHeight = contentHeight + controlsHeight + 20;
-              const maxAllowedHeight = (window.innerHeight * maxHeightVh) / 100;
-              if (totalNeededHeight > maxAllowedHeight) {
-                popupContainer.style.height = `${maxAllowedHeight}px`;
-                container.style.overflowY = 'auto';
-                log('ResizeObserver: Content exceeds max height, setting fixed height with scroll');
-              } else {
-                popupContainer.style.height = 'auto';
-                container.style.overflowY = 'hidden';
-                log('ResizeObserver: Content fits, using auto height');
-              }
-              const existingTransition = popupContainer.style.transition || '';
-              if (!existingTransition.includes('height')) {
-                popupContainer.style.transition = existingTransition + 
-                  (existingTransition ? ', ' : '') + 'height 0.2s ease';
-              }
-            }
-          }, isInitialLoad ? 200 : 400);
-        });
-        resizeObserver.observe(container);
-        if (overlay) {
-          const originalRemove = overlay.remove;
-          overlay.remove = function() {
-            clearTimeout(loadTimeout);
-            clearTimeout(resizeTimeout);
-            resizeObserver.disconnect();
-            originalRemove.call(this);
-          };
-        }
-      }, animationSpeed + 100);
+
+      updateAvailableHeight();
+      window.addEventListener('resize', updateAvailableHeight);
+
+      if (overlay) {
+        const originalRemove = overlay.remove;
+        overlay.remove = function() {
+          window.removeEventListener('resize', updateAvailableHeight);
+          originalRemove.call(this);
+        };
+      }
     }
     adjustPopupWidth(viewConfig, contentContainer) {
       const popupContainer = contentContainer.closest('.popup-container');
