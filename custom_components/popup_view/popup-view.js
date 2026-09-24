@@ -393,6 +393,9 @@
       if (popup._cleanupDragIsolation) {
         popup._cleanupDragIsolation();
       }
+      if (popup._settleTransformTimer) {
+        clearTimeout(popup._settleTransformTimer);
+      }
       this.clearPopupCards();
       this.restorePageScroll(popup);
       if (animationSpeed > 0) {
@@ -714,11 +717,22 @@
             popup.style.opacity = '1';
             container.style.transform = 'translateY(0)';
             container.style.webkitTransform = 'translateY(0)';
+            popup._settleTransformTimer = setTimeout(() => {
+              if (!container.isConnected) return;
+              // A transformed ancestor becomes the containing block for
+              // position: fixed drag hints. Remove even the zero transform
+              // once the opening animation has finished.
+              container.style.transform = 'none';
+              container.style.webkitTransform = 'none';
+              container.style.willChange = 'auto';
+            }, animationSpeed);
           });
         });
       } else {
         popup.style.opacity = '1';
-        container.style.transform = 'translateY(0)';
+        container.style.transform = 'none';
+        container.style.webkitTransform = 'none';
+        container.style.willChange = 'auto';
       }
       if (autoClose > 0) {
         let closeTimer = null;
