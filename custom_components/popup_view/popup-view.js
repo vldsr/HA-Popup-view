@@ -952,6 +952,56 @@
         throw new Error(`Failed to load configuration for dashboard: ${dashboardUrl}`);
       }
     }
+    applyCardMod(element, type, cardModConfig, variables = {}) {
+      if (!element || !cardModConfig) return;
+      setTimeout(() => {
+        const CardMod = customElements.get('card-mod');
+        if (typeof CardMod?.applyToElement !== 'function') {
+          console.warn('Popup View: card-mod is not loaded; styles were not applied');
+          return;
+        }
+        CardMod.applyToElement(element, type, cardModConfig, variables);
+      }, 0);
+    }
+    applyCardGridOptions(cardElement, cardConfig) {
+      if (!cardElement) return;
+      const configuredColumns = cardConfig?.grid_options?.columns;
+      const numericColumns = Number(configuredColumns);
+      const columns = configuredColumns === 'full'
+        ? 12
+        : Number.isFinite(numericColumns) && numericColumns > 0
+          ? Math.min(12, Math.max(1, Math.round(numericColumns)))
+          : 12;
+      cardElement.style.gridColumn = `span ${columns}`;
+      cardElement.style.minWidth = '0';
+    }
+    setupResponsiveSectionsGrid(sectionsContainer, maxColumns) {
+      const updateGrid = () => {
+        const width = sectionsContainer.clientWidth;
+        const availableColumns = Math.max(
+          1,
+          Math.min(maxColumns, Math.floor((width + 16) / 296) || 1)
+        );
+        sectionsContainer.style.gridTemplateColumns = `repeat(${availableColumns}, minmax(0, 1fr))`;
+        for (const sectionElement of sectionsContainer.children) {
+          const requestedSpan = Number(sectionElement.dataset.columnSpan) || 1;
+          sectionElement.style.gridColumn = `span ${Math.min(requestedSpan, availableColumns)}`;
+        }
+      };
+      const observer = new ResizeObserver(updateGrid);
+      observer.observe(sectionsContainer);
+      requestAnimationFrame(() => {
+        updateGrid();
+        const overlay = sectionsContainer.closest('.subview-popup-overlay');
+        if (overlay) {
+          const originalRemove = overlay.remove;
+          overlay.remove = function() {
+            observer.disconnect();
+            originalRemove.call(this);
+          };
+        }
+      });
+    }
     async createViewElement(viewConfig, viewIndex, container) {
       const hass = document.querySelector('home-assistant').hass;
       log("Creating view element with config:", viewConfig);
@@ -971,22 +1021,14 @@
         const transparentBg = container.dataset.transparentBackground === 'true';
         const singleSection = viewConfig.sections.length === 1;
         const sectionsContainer = document.createElement('div');
-        let gridColumns = '';
-        const sectionCount = viewConfig.sections.length;
-        if (sectionCount === 1) {
-          gridColumns = '1fr';
-        } else if (sectionCount === 2) {
-          gridColumns = 'repeat(auto-fit, minmax(400px, 1fr))';
-        } else if (sectionCount === 3) {
-          gridColumns = 'repeat(auto-fit, minmax(350px, 1fr))';
-        } else {
-          // 4+ sections - mindre minimum bredde
-          gridColumns = 'repeat(auto-fit, minmax(280px, 1fr))';
-        }
-        
+        const configuredMaxColumns = Number(viewConfig.max_columns);
+        const maxColumns = Number.isFinite(configuredMaxColumns) && configuredMaxColumns > 0
+          ? Math.max(1, Math.round(configuredMaxColumns))
+          : Math.max(1, Math.min(4, viewConfig.sections.length));
+
         sectionsContainer.style.cssText = `
           display: grid;
-          grid-template-columns: ${gridColumns};
+          grid-template-columns: repeat(${maxColumns}, minmax(0, 1fr));
           gap: 16px;
           padding: 4px 16px;
           width: 100%;
@@ -995,6 +1037,11 @@
         `;
         for (const section of viewConfig.sections) {
           const sectionElement = document.createElement('div');
+          const rawColumnSpan = section.column_span === 'full' ? maxColumns : Number(section.column_span);
+          const columnSpan = Number.isFinite(rawColumnSpan) && rawColumnSpan > 0
+            ? Math.min(maxColumns, Math.max(1, Math.round(rawColumnSpan)))
+            : 1;
+          sectionElement.dataset.columnSpan = String(columnSpan);
           sectionElement.style.cssText = `
             width: 100%;
             box-sizing: border-box;
@@ -1015,8 +1062,9 @@
           }
           const cardsContainer = document.createElement('div');
           cardsContainer.style.cssText = `
-            display: flex;
-            flex-direction: column;
+            display: grid;
+            grid-template-columns: repeat(12, minmax(0, 1fr));
+            align-items: start;
             gap: 8px;
             width: 100%;
           `;
@@ -1026,6 +1074,7 @@
                 log("Creating card in section:", cardConfig.type);
                 const cardElement = await this.createCard(cardConfig, hass);
                 if (cardElement) {
+                  this.applyCardGridOptions(cardElement, cardConfig);
                   cardsContainer.appendChild(cardElement);
                 }
               } catch (error) {
@@ -1049,8 +1098,10 @@
           }
           sectionElement.appendChild(cardsContainer);
           sectionsContainer.appendChild(sectionElement);
+          this.applyCardMod(sectionElement, 'section', section.card_mod, { config: section });
         }
         viewElement.appendChild(sectionsContainer);
+        this.setupResponsiveSectionsGrid(sectionsContainer, maxColumns);
       }
       else if (viewConfig.cards && viewConfig.cards.length > 0) {
         log(`Creating ${viewConfig.cards.length} cards`);
@@ -1121,6 +1172,7 @@
         `;
       }
       container.appendChild(viewElement);
+      this.applyCardMod(viewElement, 'view', viewConfig.card_mod, { config: viewConfig });
       this.adjustPopupWidth(viewConfig, container);
       this.observeContentHeight(container);
     }
@@ -1276,6 +1328,7 @@
           box-sizing: border-box;
           pointer-events: auto;
         `;
+        this.applyCardMod(el, 'card', cardConfig.card_mod, { config: cardConfig });
         return el;
       } catch (error) {
         console.error('Error creating card:', cardConfig.type, error);
