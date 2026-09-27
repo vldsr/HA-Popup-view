@@ -95,6 +95,10 @@
         });
       };
 
+      // Keep state changes immediate. The slow fallback also covers updates
+      // to hass that are not accompanied by a state_changed event.
+      const fallbackIntervalId = setInterval(scheduleUpdate, 1000);
+
       Promise.resolve(connection.subscribeEvents(scheduleUpdate, 'state_changed'))
         .then((unsubscribe) => {
           if (disposed || !this.isLoadActive(loadContext)) {
@@ -107,6 +111,7 @@
 
       this._hassUnsubscribe = () => {
         disposed = true;
+        clearInterval(fallbackIntervalId);
         if (frameId !== null) cancelAnimationFrame(frameId);
         eventUnsubscribe?.();
         log("Hass subscription cleaned up");
