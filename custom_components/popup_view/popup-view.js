@@ -14,10 +14,17 @@
   log("=== POPUP VIEW SCRIPT LOADING ===");
   class PopupView {
     constructor() {
+      const previousInstance = window.__popupViewInstance;
+      if (previousInstance && previousInstance !== this && typeof previousInstance.destroy === 'function') {
+        previousInstance.destroy();
+      }
       log("=== POPUP VIEW CONSTRUCTOR CALLED ===");
       this.sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       this._popupCards = [];
       this._hassUnsubscribe = null;
+      this._eventUnsubscribe = null;
+      this._destroyed = false;
+      this._activeLoad = null;
       this._popupHistoryActive = false;
       this._popupHistoryHandler = this.handlePopupHistory.bind(this);
       window.addEventListener('popstate', this._popupHistoryHandler);
@@ -40,12 +47,14 @@
       const originalCallService = this._hass?.callService;
       if (originalCallService && !this._intercepted) {
         this._intercepted = true;
-        this._hass.callService = (domain, service, data, target) => {
+        this._originalCallService = originalCallService;
+        this._interceptedCallService = (domain, service, data, target) => {
           if (domain === 'popup_view' && service === 'open') {
             data = { ...data, _session_id: this.sessionId };
           }
           return originalCallService.call(this._hass, domain, service, data, target);
         };
+        this._hass.callService = this._interceptedCallService;
       }
     }
     toggleDebugMode(enabled = null) {
@@ -58,45 +67,62 @@
       log("You can toggle debug mode by calling: window.togglePopupDebug()");
       return window.__popupViewDebug;
     }
-    setupHassSubscription() {
+    setupHassSubscription(loadContext) {
       if (this._hassUnsubscribe) {
         this._hassUnsubscribe();
         this._hassUnsubscribe = null;
       }
       const haElement = document.querySelector('home-assistant');
-      if (!haElement) return;
+      const connection = haElement?.hass?.connection;
+      if (!connection || !this.isLoadActive(loadContext)) return;
 
       let lastHass = haElement.hass;
-      let lastStates = haElement.hass?.states;
+      let frameId = null;
+      let eventUnsubscribe = null;
+      let disposed = false;
 
-      const checkHassUpdates = () => {
-        const currentHass = haElement.hass;
-        if (currentHass && (currentHass !== lastHass || currentHass.states !== lastStates)) {
-          lastHass = currentHass;
-          lastStates = currentHass.states;
-          this._hass = currentHass;
-          this.updatePopupCards(currentHass);
-        }
+      const scheduleUpdate = () => {
+        if (frameId !== null || disposed) return;
+        frameId = requestAnimationFrame(() => {
+          frameId = null;
+          if (disposed || !this.isLoadActive(loadContext)) return;
+          const currentHass = haElement.hass;
+          if (currentHass && currentHass !== lastHass) {
+            lastHass = currentHass;
+            this._hass = currentHass;
+            this.updatePopupCards(currentHass, loadContext.cards);
+          }
+        });
       };
 
-      const intervalId = setInterval(checkHassUpdates, 100);
+      Promise.resolve(connection.subscribeEvents(scheduleUpdate, 'state_changed'))
+        .then((unsubscribe) => {
+          if (disposed || !this.isLoadActive(loadContext)) {
+            unsubscribe?.();
+            return;
+          }
+          eventUnsubscribe = unsubscribe;
+        })
+        .catch((error) => console.error('Popup View: hass subscription failed', error));
 
       this._hassUnsubscribe = () => {
-        clearInterval(intervalId);
-        log("🔌 Hass subscription cleaned up");
+        disposed = true;
+        if (frameId !== null) cancelAnimationFrame(frameId);
+        eventUnsubscribe?.();
+        log("Hass subscription cleaned up");
       };
 
-      log("🔗 Hass subscription set up for reactive updates");
+      log("Hass subscription set up for reactive updates");
     }
-    updatePopupCards(hass) {
-      if (!this._popupCards || this._popupCards.length === 0) return;
+    updatePopupCards(hass, cards = this._popupCards) {
+      if (!cards || cards.length === 0) return;
 
-      for (const card of this._popupCards) {
+      for (const card of cards) {
         if (card && card.hass !== undefined) {
           card.hass = hass;
         }
       }
-      log(`🔄 Updated ${this._popupCards.length} cards with new hass state`);
+      log(`🔄 Updated ${cards.length} cards with new hass state`);
     }
     clearPopupCards() {
       this._popupCards = [];
@@ -105,6 +131,28 @@
         this._hassUnsubscribe = null;
       }
       log("🧹 Cleared popup cards and subscriptions");
+    }
+    isLoadActive(loadContext) {
+      return !this._destroyed && this._activeLoad === loadContext && loadContext?.popup?.isConnected;
+    }
+    assertLoadActive(loadContext) {
+      if (this.isLoadActive(loadContext)) return;
+      const error = new Error('Popup loading was cancelled');
+      error.name = 'AbortError';
+      throw error;
+    }
+    destroy() {
+      this._destroyed = true;
+      this._activeLoad = null;
+      this.clearPopupCards();
+      if (this._eventSetupInterval) clearInterval(this._eventSetupInterval);
+      if (this._eventSetupTimeout) clearTimeout(this._eventSetupTimeout);
+      this._eventUnsubscribe?.();
+      this._eventUnsubscribe = null;
+      window.removeEventListener('popstate', this._popupHistoryHandler);
+      if (this._hass?.callService === this._interceptedCallService && this._originalCallService) {
+        this._hass.callService = this._originalCallService;
+      }
     }
     lockPageScroll(popup) {
       const root = document.documentElement;
@@ -396,7 +444,10 @@
       if (popup._settleTransformTimer) {
         clearTimeout(popup._settleTransformTimer);
       }
-      this.clearPopupCards();
+      if (this._activeLoad?.popup === popup) {
+        this._activeLoad = null;
+        this.clearPopupCards();
+      }
       this.restorePageScroll(popup);
       if (animationSpeed > 0) {
         const container = popup.querySelector('.popup-container');
@@ -421,13 +472,18 @@
     }
     setupEventListener() {
       log("=== SETTING UP EVENT LISTENER ===");
-      const checkHass = setInterval(() => {
+      this._eventSetupInterval = setInterval(() => {
         const hass = document.querySelector('home-assistant')?.hass;
         if (hass?.connection && hass.states) {
           this._hass = hass;
           this.interceptServiceCalls();
-          clearInterval(checkHass);
-          hass.connection.subscribeEvents((event) => {
+          clearInterval(this._eventSetupInterval);
+          this._eventSetupInterval = null;
+          if (this._eventSetupTimeout) {
+            clearTimeout(this._eventSetupTimeout);
+            this._eventSetupTimeout = null;
+          }
+          const subscription = hass.connection.subscribeEvents((event) => {
             log("=== POPUP EVENT RECEIVED ===");
             log("Event data:", event.data);
             const deviceInfo = this.identifyThisDevice();
@@ -491,11 +547,22 @@
             }
             log("=== EVENT HANDLING COMPLETE ===\n");
           }, 'popup_view_open');
+          Promise.resolve(subscription)
+            .then((unsubscribe) => {
+              if (this._destroyed) {
+                unsubscribe?.();
+                return;
+              }
+              this._eventUnsubscribe = unsubscribe;
+            })
+            .catch((error) => console.error('Popup View: event subscription failed', error));
           log("=== POPUP VIEW LISTENING FOR EVENTS ===");
         }
       }, 100);
-      setTimeout(() => {
-        clearInterval(checkHass);
+      this._eventSetupTimeout = setTimeout(() => {
+        if (!this._eventSetupInterval) return;
+        clearInterval(this._eventSetupInterval);
+        this._eventSetupInterval = null;
         console.warn("Popup View: Could not connect to HA after 10 seconds");
       }, 10000);
     }
@@ -795,11 +862,17 @@
         }
       });
 
+      this.clearPopupCards();
+      const loadContext = { popup, cards: [] };
+      this._activeLoad = loadContext;
+      this._popupCards = loadContext.cards;
+
       try {
-        this.clearPopupCards();
-        await this.loadViewContent(subviewPath, content);
-        this.setupHassSubscription();
+        await this.loadViewContent(subviewPath, content, loadContext);
+        this.assertLoadActive(loadContext);
+        this.setupHassSubscription(loadContext);
       } catch (error) {
+        if (error.name === 'AbortError' || !this.isLoadActive(loadContext)) return;
         console.error("Error loading view:", error);
         content.innerHTML = `
           <div style="text-align: center; color: var(--error-color); padding: 20px;">
@@ -809,12 +882,13 @@
         `;
       }
     }
-    async loadViewContent(subviewPath, contentElement) {
+    async loadViewContent(subviewPath, contentElement, loadContext) {
       const hass = document.querySelector('home-assistant');
       if (!hass) {
         throw new Error('Home Assistant element not found');
       }
       await this.waitForLovelace();
+      this.assertLoadActive(loadContext);
       if (subviewPath.startsWith('/')) {
         log("Loading view from path:", subviewPath);
       }
@@ -833,6 +907,7 @@
       log("Full path received:", subviewPath);
       log(`Attempting to get config for dashboard: ${dashboardUrl}`);
       const lovelaceConfig = await this.getLovelaceConfig(dashboardUrl);
+      this.assertLoadActive(loadContext);
       log("Config received:", lovelaceConfig);
       if (!lovelaceConfig) {
         throw new Error(`Could not get configuration for dashboard: ${dashboardUrl}`);
@@ -881,12 +956,14 @@
       log("Found view config:", JSON.stringify(viewConfig, null, 2));
       log("View config keys:", Object.keys(viewConfig || {}));
       log("Starting to create view element...");
+      this.assertLoadActive(loadContext);
       contentElement.innerHTML = '';
       // Reset display style after loading (flex was only for centering spinner)
       contentElement.style.display = 'block';
       contentElement.style.alignItems = 'unset';
       contentElement.style.justifyContent = 'unset';
-      await this.createViewElement(viewConfig, viewIndex, contentElement);
+      await this.createViewElement(viewConfig, viewIndex, contentElement, loadContext);
+      this.assertLoadActive(loadContext);
       log("View element created successfully");
     }
     async waitForLovelace(timeout = 5000) {
@@ -1002,7 +1079,7 @@
         }
       });
     }
-    async createViewElement(viewConfig, viewIndex, container) {
+    async createViewElement(viewConfig, viewIndex, container, loadContext) {
       const hass = document.querySelector('home-assistant').hass;
       log("Creating view element with config:", viewConfig);
       log("View type:", viewConfig.type);
@@ -1072,12 +1149,14 @@
             for (const cardConfig of section.cards) {
               try {
                 log("Creating card in section:", cardConfig.type);
-                const cardElement = await this.createCard(cardConfig, hass);
+                const cardElement = await this.createCard(cardConfig, hass, loadContext);
+                this.assertLoadActive(loadContext);
                 if (cardElement) {
                   this.applyCardGridOptions(cardElement, cardConfig);
                   cardsContainer.appendChild(cardElement);
                 }
               } catch (error) {
+                if (error.name === 'AbortError') throw error;
                 console.error('Error creating card:', error);
                 const errorCard = document.createElement('div');
                 errorCard.style.cssText = `
@@ -1138,11 +1217,13 @@
         for (const cardConfig of viewConfig.cards) {
           try {
             log("Creating card:", cardConfig.type);
-            const cardElement = await this.createCard(cardConfig, hass);
+            const cardElement = await this.createCard(cardConfig, hass, loadContext);
+            this.assertLoadActive(loadContext);
             if (cardElement) {
               cardsContainer.appendChild(cardElement);
             }
           } catch (error) {
+            if (error.name === 'AbortError') throw error;
             console.error('Error creating card:', error);
             const errorCard = document.createElement('div');
             errorCard.style.cssText = `
@@ -1252,7 +1333,7 @@
       }, 50);
       log(`Popup width animated from 600px to: ${optimalWidth} (max: ${maxWidth})`);
     }
-    async createCard(cardConfig, hass) {
+    async createCard(cardConfig, hass, loadContext) {
       try {
         let helpers = null;
         if (window.loadCardHelpers) {
@@ -1269,26 +1350,15 @@
           if (el.setConfig) el.setConfig(cardConfig);
         }
 
+        this.assertLoadActive(loadContext);
         el.hass = hass;
 
         // Register card for reactive updates
-        this._popupCards.push(el);
+        loadContext.cards.push(el);
 
         // Force update for LitElement-based cards
         if (el.requestUpdate) {
           el.requestUpdate();
-        }
-
-        // Wait for card to be ready (with timeout to prevent blocking)
-        if (el.updateComplete) {
-          try {
-            await Promise.race([
-              el.updateComplete,
-              new Promise(resolve => setTimeout(resolve, 100))
-            ]);
-          } catch (e) {
-            // Ignore errors from updateComplete
-          }
         }
 
         el._navigate = (path) => {
@@ -1331,6 +1401,7 @@
         this.applyCardMod(el, 'card', cardConfig.card_mod, { config: cardConfig });
         return el;
       } catch (error) {
+        if (error.name === 'AbortError') throw error;
         console.error('Error creating card:', cardConfig.type, error);
         const errorCard = document.createElement('div');
         errorCard.style.cssText = `
