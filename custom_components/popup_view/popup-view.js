@@ -1,8 +1,8 @@
 (() => {
-  const DEBUG_MODE = false;
-  const log = DEBUG_MODE ? console.log : () => {};
-  const debug = DEBUG_MODE ? console.debug : () => {};
-  const warn = DEBUG_MODE ? console.warn : () => {};
+  let debugMode = window.__popupViewDebug === true;
+  const log = (...args) => {
+    if (debugMode) console.log(...args);
+  };
   const TOOL_TITLE = "🎉 Popup View";
   const TOOL_VERSION = "v0.5.7";
   
@@ -23,6 +23,7 @@
       this._popupCards = [];
       this._hassUnsubscribe = null;
       this._eventUnsubscribe = null;
+      this._cardHelpersPromise = null;
       this._destroyed = false;
       this._activeLoad = null;
       this._popupHistoryActive = false;
@@ -58,14 +59,13 @@
       }
     }
     toggleDebugMode(enabled = null) {
-      if (enabled !== null) {
-        window.__popupViewDebug = enabled;
-      } else {
-        window.__popupViewDebug = !window.__popupViewDebug;
+      debugMode = enabled !== null ? Boolean(enabled) : !debugMode;
+      window.__popupViewDebug = debugMode;
+      if (debugMode) {
+        log("Popup View Debug Mode: ENABLED");
+        log("You can toggle debug mode by calling: window.togglePopupDebug()");
       }
-      log(`🐛 Popup View Debug Mode: ${window.__popupViewDebug ? 'ENABLED' : 'DISABLED'}`);
-      log("You can toggle debug mode by calling: window.togglePopupDebug()");
-      return window.__popupViewDebug;
+      return debugMode;
     }
     setupHassSubscription(loadContext) {
       if (this._hassUnsubscribe) {
@@ -200,73 +200,7 @@
         }
       };
     }
-    getOrCreateDeviceId() {
-      log("🔍 Getting device ID...");
-      let deviceId = localStorage.getItem('popup_view_device_id');
-      if (!deviceId) {
-        deviceId = `popup_device_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        localStorage.setItem('popup_view_device_id', deviceId);
-        log("✨ Created new device ID:", deviceId);
-      } else {
-        log("✅ Found existing device ID:", deviceId);
-      }
-      return deviceId;
-    }
-    getDeviceFingerprint() {
-      const fingerprint = {
-        userAgent: navigator.userAgent,
-        screenResolution: `${screen.width}x${screen.height}`,
-        colorDepth: screen.colorDepth,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        language: navigator.language,
-        platform: navigator.platform
-      };
-      log("📱 Device fingerprint:", fingerprint);
-      return fingerprint;
-    }
-    getSessionId() {
-      if (!window.__popupViewSessionId) {
-        window.__popupViewSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        log("🔑 Created session ID:", window.__popupViewSessionId);
-      }
-      return window.__popupViewSessionId;
-    }
-    identifyThisDevice() {
-      log("=== DEVICE IDENTIFICATION START ===");
-      const identification = {
-        deviceId: this.getOrCreateDeviceId(),
-        sessionId: this.getSessionId(),
-        fingerprint: this.getDeviceFingerprint(),
-        companion: null,
-        browserMod: null
-      };
-      if (window.webkit?.messageHandlers?.externalBus) {
-        identification.companion = "iOS Companion App";
-        log("📱 Detected iOS Companion App");
-      } else if (window.externalApp) {
-        identification.companion = "Android Companion App";
-        log("📱 Detected Android Companion App");
-      }
-      const hass = document.querySelector('home-assistant')?.hass;
-      if (hass?.states) {
-        const browserModDevices = Object.keys(hass.states)
-          .filter(entityId => entityId.startsWith('browser_mod.'));
-        if (browserModDevices.length > 0) {
-          log("🖥️ Browser Mod entities found:", browserModDevices);
-          identification.browserMod = browserModDevices;
-        }
-      }
-      log("=== DEVICE IDENTIFICATION COMPLETE ===");
-      log("Full identification:", identification);
-      return identification;
-    }
-    normalizeEntityId(entityId) {
-      if (!entityId) return '';
-      const normalized = entityId.toLowerCase().trim();
-      log(`📝 Normalized: "${entityId}" -> "${normalized}"`);
-      return normalized;
-    }
-    matchesTargetDisplay(targetDisplays, deviceInfo) {
+    matchesTargetDisplay(targetDisplays) {
       log("=== DISPLAY MATCHING START ===");
       log("Target displays:", targetDisplays);
       if (!targetDisplays || targetDisplays.length === 0) {
@@ -301,86 +235,6 @@
       }
       log("❌ NO MATCH: No targets match current user");
       return false;
-    }
-    getCompanionAppDeviceId() {
-      const hass = document.querySelector('home-assistant')?.hass;
-      if (window.externalApp) {
-        try {
-          if (window.externalApp.getDeviceId) {
-            const deviceId = window.externalApp.getDeviceId();
-            log("Android device ID from externalApp:", deviceId);
-            return deviceId.toLowerCase().replace(/[^a-z0-9_]/g, '_');
-          }
-          if (window.externalApp.deviceID) {
-            return window.externalApp.deviceID.toLowerCase().replace(/[^a-z0-9_]/g, '_');
-          }
-        } catch (e) {
-          log("Error getting Android device ID:", e);
-        }
-      }
-      if (window.webkit?.messageHandlers?.externalBus) {
-        const userAgent = navigator.userAgent.toLowerCase();
-        log("iOS User Agent:", userAgent);
-        const keys = Object.keys(localStorage);
-        for (const key of keys) {
-          if (key.toLowerCase().includes('device') || key.toLowerCase().includes('companion')) {
-            const value = localStorage.getItem(key);
-            log(`Found potential device key ${key}:`, value);
-            if (value && value.length < 100) {
-              return value.toLowerCase().replace(/[^a-z0-9_]/g, '_');
-            }
-          }
-        }
-      }
-      const isCompanionApp = window.externalApp || window.webkit?.messageHandlers?.externalBus;
-      if (hass?.user?.name && isCompanionApp) {
-        const userName = hass.user.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
-        const isAndroid = /android/i.test(navigator.userAgent);
-        const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
-        if (isAndroid) {
-          if (/pixel/i.test(navigator.userAgent)) {
-            const possibleNames = [
-              `${userName}_pixel`,
-              `${userName}s_pixel`
-            ];
-            log("Possible Android device names:", possibleNames);
-            return possibleNames;
-          }
-        } else if (isIOS) {
-          const possibleNames = [
-            `${userName}_iphone`,
-            `${userName}s_iphone`,
-            `iphone_${userName}`
-          ];
-          return possibleNames;
-        }
-      }
-      return null;
-    }
-    getWebhookId() {
-      if (window.webkit?.messageHandlers?.externalBus) {
-        const webhookId = localStorage.getItem('webhook_id');
-        if (webhookId) {
-          return webhookId.toLowerCase();
-        }
-      }
-      return null;
-    }
-    getBrowserModId() {
-      const possibleKeys = [
-        'browserModID',
-        'browser_mod_id',
-        'browser-mod-id',
-        'browser_mod_browser_id'
-      ];
-      for (const key of possibleKeys) {
-        const value = localStorage.getItem(key);
-        if (value) return value.toLowerCase();
-      }
-      if (window.browser_mod?.browserID) {
-        return window.browser_mod.browserID.toLowerCase();
-      }
-      return null;
     }
     ensureScrollbarStyles() {
       let style = document.getElementById('popup-view-scrollbar-style');
@@ -491,7 +345,6 @@
           const subscription = hass.connection.subscribeEvents((event) => {
             log("=== POPUP EVENT RECEIVED ===");
             log("Event data:", event.data);
-            const deviceInfo = this.identifyThisDevice();
             const { displays, is_tap_action } = event.data;
             let shouldShowPopup = false;
             let reason = "";
@@ -510,7 +363,7 @@
             else if (displays && displays.length > 0) {
               log("🎯 TARGETED DISPLAY mode");
               log("Checking if this device matches targets...");
-              shouldShowPopup = this.matchesTargetDisplay(displays, deviceInfo);
+              shouldShowPopup = this.matchesTargetDisplay(displays);
               reason = shouldShowPopup ? "Device matches target displays" : "Device does not match targets";
             }
             else {
@@ -807,25 +660,20 @@
         container.style.willChange = 'auto';
       }
       if (autoClose > 0) {
+        const idleTimeout = autoClose * 1000;
         let closeTimer = null;
         let lastActivity = Date.now();
-        const resetTimer = () => {
-          lastActivity = Date.now();
-          if (closeTimer) {
-            clearTimeout(closeTimer);
+
+        const checkIdle = () => {
+          const remaining = idleTimeout - (Date.now() - lastActivity);
+          if (remaining > 0) {
+            closeTimer = setTimeout(checkIdle, remaining);
+            return;
           }
-          closeTimer = setTimeout(() => {
-            const timeSinceActivity = Date.now() - lastActivity;
-            if (timeSinceActivity < 1000) {
-              log("Recent activity detected, resetting auto-close timer");
-              resetTimer();
-            } else {
-              log("Auto-closing popup after idle timeout");
-              this.closePopup(popup, animationSpeed);
-            }
-          }, autoClose * 1000);
-          log(`Auto-close timer reset: ${autoClose} seconds`);
+          log("Auto-closing popup after idle timeout");
+          this.closePopup(popup, animationSpeed);
         };
+
         const activityEvents = [
           'mousedown', 'mousemove', 'mouseenter',
           'touchstart', 'touchmove',
@@ -834,14 +682,14 @@
         ];
         const handleActivity = (e) => {
           if (popup.contains(e.target)) {
-            resetTimer();
+            lastActivity = Date.now();
           }
         };
         activityEvents.forEach(eventType => {
           popup.addEventListener(eventType, handleActivity, { passive: true });
         });
         content.addEventListener('scroll', handleActivity, { passive: true });
-        resetTimer();
+        closeTimer = setTimeout(checkIdle, idleTimeout);
         popup._cleanupAutoClose = () => {
           if (closeTimer) {
             clearTimeout(closeTimer);
@@ -919,13 +767,14 @@
       }
       const views = lovelaceConfig.views || [];
       log(`Found ${views.length} views in dashboard '${dashboardUrl}'`);
-      log("Available views:", views.map(v => ({ 
-        path: v.path, 
-        title: v.title,
-        index: views.indexOf(v)
-      })));
+      if (debugMode) {
+        log("Available views:", views.map((v, index) => ({
+          path: v.path,
+          title: v.title,
+          index
+        })));
+      }
       let viewConfig = views.find(v => v.path === viewPath);
-      let viewIndex = views.findIndex(v => v.path === viewPath);
       if (viewConfig) {
         log("Found view by path match:", viewPath);
       }
@@ -933,14 +782,12 @@
         const index = parseInt(viewPath);
         if (!isNaN(index) && views[index]) {
           viewConfig = views[index];
-          viewIndex = index;
           log(`Found view by index: ${index}`);
         }
       }
       if (!viewConfig) {
         if (viewPath === '' && views[0]) {
           viewConfig = views[0];
-          viewIndex = 0;
         } else {
           const foundView = views.find(v => 
             v.path === viewPath || 
@@ -949,7 +796,6 @@
           );
           if (foundView) {
             viewConfig = foundView;
-            viewIndex = views.indexOf(foundView);
             log("Found view with alternative matching:", foundView.path);
           } else {
             console.error("Could not find view. Looking for:", viewPath);
@@ -958,8 +804,10 @@
           }
         }
       }
-      log("Found view config:", JSON.stringify(viewConfig, null, 2));
-      log("View config keys:", Object.keys(viewConfig || {}));
+      if (debugMode) {
+        log("Found view config:", JSON.stringify(viewConfig, null, 2));
+        log("View config keys:", Object.keys(viewConfig || {}));
+      }
       log("Starting to create view element...");
       this.assertLoadActive(loadContext);
       contentElement.innerHTML = '';
@@ -967,7 +815,7 @@
       contentElement.style.display = 'block';
       contentElement.style.alignItems = 'unset';
       contentElement.style.justifyContent = 'unset';
-      await this.createViewElement(viewConfig, viewIndex, contentElement, loadContext);
+      await this.createViewElement(viewConfig, contentElement, loadContext);
       this.assertLoadActive(loadContext);
       log("View element created successfully");
     }
@@ -1064,10 +912,16 @@
           1,
           Math.min(maxColumns, Math.floor((width + 16) / 296) || 1)
         );
-        sectionsContainer.style.gridTemplateColumns = `repeat(${availableColumns}, minmax(0, 1fr))`;
+        const gridTemplate = `repeat(${availableColumns}, minmax(0, 1fr))`;
+        if (sectionsContainer.style.gridTemplateColumns !== gridTemplate) {
+          sectionsContainer.style.gridTemplateColumns = gridTemplate;
+        }
         for (const sectionElement of sectionsContainer.children) {
           const requestedSpan = Number(sectionElement.dataset.columnSpan) || 1;
-          sectionElement.style.gridColumn = `span ${Math.min(requestedSpan, availableColumns)}`;
+          const gridColumn = `span ${Math.min(requestedSpan, availableColumns)}`;
+          if (sectionElement.style.gridColumn !== gridColumn) {
+            sectionElement.style.gridColumn = gridColumn;
+          }
         }
       };
       const observer = new ResizeObserver(updateGrid);
@@ -1084,7 +938,7 @@
         }
       });
     }
-    async createViewElement(viewConfig, viewIndex, container, loadContext) {
+    async createViewElement(viewConfig, container, loadContext) {
       const hass = document.querySelector('home-assistant').hass;
       log("Creating view element with config:", viewConfig);
       log("View type:", viewConfig.type);
@@ -1100,8 +954,6 @@
       `;
       if (viewConfig.type === 'sections' && viewConfig.sections) {
         log(`Creating sections view with ${viewConfig.sections.length} sections`);
-        const transparentBg = container.dataset.transparentBackground === 'true';
-        const singleSection = viewConfig.sections.length === 1;
         const sectionsContainer = document.createElement('div');
         const configuredMaxColumns = Number(viewConfig.max_columns);
         const maxColumns = Number.isFinite(configuredMaxColumns) && configuredMaxColumns > 0
@@ -1189,8 +1041,6 @@
       }
       else if (viewConfig.cards && viewConfig.cards.length > 0) {
         log(`Creating ${viewConfig.cards.length} cards`);
-        const transparentBg = container.dataset.transparentBackground === 'true';
-        const singleCard = viewConfig.cards.length === 1;
         const cardsContainer = document.createElement('div');
         if (viewConfig.type === 'masonry' || !viewConfig.type) {
           cardsContainer.style.cssText = `
@@ -1249,7 +1099,9 @@
         viewElement.appendChild(cardsContainer);
       } else {
         log("No cards found in view config");
-        log("View config structure:", JSON.stringify(viewConfig, null, 2));
+        if (debugMode) {
+          log("View config structure:", JSON.stringify(viewConfig, null, 2));
+        }
         viewElement.innerHTML = `
           <div style="text-align: center; padding: 40px; color: var(--secondary-text-color);">
             <ha-icon icon="mdi:view-dashboard-outline" style="--mdc-icon-size: 64px;"></ha-icon>
@@ -1301,7 +1153,7 @@
       const overlay = popupContainer.closest('.subview-popup-overlay');
       const popupWidthPercent = parseInt(overlay?.dataset.popupWidth) || 90;
       let optimalWidth = '600px';
-      let maxWidth = `${popupWidthPercent}vw`;
+      const maxWidth = `${popupWidthPercent}vw`;
       if (viewConfig.type === 'sections' && viewConfig.sections) {
         const sectionCount = viewConfig.sections.length;
         log(`Adjusting width for ${sectionCount} sections`);
@@ -1338,12 +1190,25 @@
       }, 50);
       log(`Popup width animated from 600px to: ${optimalWidth} (max: ${maxWidth})`);
     }
+    async getCardHelpers() {
+      if (!window.loadCardHelpers) return null;
+      if (!this._cardHelpersPromise) {
+        this._cardHelpersPromise = Promise.resolve()
+          .then(() => window.loadCardHelpers())
+          .then((helpers) => {
+            if (!helpers) this._cardHelpersPromise = null;
+            return helpers;
+          })
+          .catch((error) => {
+            this._cardHelpersPromise = null;
+            throw error;
+          });
+      }
+      return this._cardHelpersPromise;
+    }
     async createCard(cardConfig, hass, loadContext) {
       try {
-        let helpers = null;
-        if (window.loadCardHelpers) {
-          helpers = await window.loadCardHelpers();
-        }
+        const helpers = await this.getCardHelpers();
 
         let el;
         if (helpers?.createCardElement) {
